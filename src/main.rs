@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, anyhow};
 use base64::Engine;
 use clap::Parser;
 use near_crypto::{InMemorySigner, SecretKey};
@@ -20,7 +20,7 @@ use near_primitives::{
     types::{AccountId, BlockReference, Gas},
     views::{FinalExecutionStatus, QueryRequest, TxExecutionStatus},
 };
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use serde::{Deserialize, ser::Serialize};
@@ -49,6 +49,9 @@ pub enum RpcError {
     /// Failed to deserialize response
     #[error("Failed to deserialize response: {0}")]
     DeserializeError(#[from] serde_json::Error),
+    /// Other error
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
     /// Timeout exceeded
     #[error("Timeout exceeded: {0}")]
     TimeoutError(u64, u64),
@@ -56,7 +59,7 @@ pub enum RpcError {
     #[error("No outcome for transaction: {0}")]
     NoOutcome(String),
 }
-pub type RpcResult<T = ()> = Result<T, RpcError>;
+pub type RpcResult<T = ()> = std::result::Result<T, RpcError>;
 
 #[derive(Debug, Clone, Parser)]
 #[command(
@@ -128,7 +131,7 @@ pub fn serialize_and_encode(data: impl Serialize) -> Vec<u8> {
         .into_bytes()
 }
 
-async fn fetch_prices(hermes: &str, ids: &[String]) -> Result<String> {
+async fn fetch_prices(hermes: &str, ids: &[String]) -> anyhow::Result<String> {
     let client = reqwest::Client::new();
     let mut url = reqwest::Url::parse(hermes)?;
     {
@@ -279,17 +282,20 @@ pub async fn send_tx(
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> RpcResult<()> {
     tracing_subscriber::registry()
         .with(fmt::layer())
         .with(EnvFilter::from_default_env())
         .init();
 
     let args = Args::parse();
-    let signer_id = AccountId::from_str(&args.signer_id)?;
-    let sk = SecretKey::from_str(&args.signer_sk)?;
+    let signer_id = AccountId::from_str(&args.signer_id)
+        .context("parse signer account id")?;
+    let sk = SecretKey::from_str(&args.signer_sk)
+        .context("parse signer secret key")?;
     let signer = InMemorySigner::from_secret_key(signer_id.clone(), sk);
-    let oracle = AccountId::from_str(&args.oracle)?;
+    let oracle = AccountId::from_str(&args.oracle)
+        .context("parse oracle account id")?;
     let client = JsonRpcClient::connect(&args.rpc);
 
     info!("Starting pushing prices on-chain");
@@ -322,7 +328,7 @@ async fn main() -> Result<()> {
                 }
             }
 
-            Ok::<_, anyhow::Error>(())
+            Ok::<_, RpcError>(())
         }
         .await
         {
